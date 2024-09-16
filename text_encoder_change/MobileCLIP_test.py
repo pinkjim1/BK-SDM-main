@@ -1,0 +1,145 @@
+from diffusers import AutoencoderKL, UNet2DConditionModel, LMSDiscreteScheduler
+import mobileclip
+import torch
+import torch.nn as nn
+from PIL import Image
+
+
+# 1. Load the autoencoder model which will be used to decode the latents into image space.
+vae = AutoencoderKL.from_pretrained("../bk-sdm-v2-small/vae", subfolder="vae")
+
+# 2. Load the tokenizer and text encoder to tokenize and encode the text.
+tokenizer = mobileclip.get_tokenizer('mobileclip_s2')
+model, _, preprocess = mobileclip.create_model_and_transforms('mobileclip_s2', pretrained='MobileCLIP-S2/mobileclip_s2.pt')
+#text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14")
+
+# 3. The UNet model for generating the latents.
+unet = UNet2DConditionModel.from_pretrained("../bk-sdm-v2-small/unet", subfolder="unet")
+
+
+# 4. load the K-LMS scheduler with some fitting parameters
+
+scheduler = LMSDiscreteScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000)
+
+# 5. move the models to GPU
+torch_device = "cuda"
+vae.to(torch_device)
+model.to(torch_device)
+tokenizer.to(torch_device)
+unet.to(torch_device)
+
+
+# 6. set parameters
+prompt = ["a horse"]
+
+
+height = 512                        # default height of Stable Diffusion
+width = 512                         # default width of Stable Diffusion
+
+num_inference_steps = 100           # Number of denoising steps
+
+guidance_scale = 7.5                # Scale for classifier-free guidance
+
+generator = torch.manual_seed(0)    # Seed generator to create the inital latent noise
+
+batch_size = len(prompt)
+
+
+# 7. get the text_embeddings for the passed prompt
+text_input = tokenizer(prompt)
+
+text_input = text_input.to(torch_device)
+
+text_embeddings = model.encode_text(text_input)
+class MappingNetwork(nn.Module):
+    def __init__(self):
+        super(MappingNetwork, self).__init__()
+        self.bn1 = nn.BatchNorm1d(512)
+        self.layer1 = nn.Linear(512, 768)
+        self.layer2 = nn.Linear(768, 896)
+        self.layer3 = nn.Linear(896, 1024)
+        self.bn3 = nn.BatchNorm1d(1024)
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        x=x.permute(0,2,1)
+        x=self.bn1(x)
+        x=x.permute(0,2,1)
+        x=self.layer1(x)
+        x=self.relu(self.layer2(x))
+        x = self.layer3(x)
+        x = x.permute(0, 2, 1)
+        x = self.bn3(x)
+        x = x.permute(0, 2, 1)
+        return x
+
+mmodel=torch.load('../checkpoint/model_checkpoint_epoch_9.pth').to(torch_device)
+
+mapping_embeddings=mmodel(text_embeddings)
+#text_embeddings = text_encoder(text_input.input_ids.to(torch_device))[0]
+
+
+# 8. get the unconditional text embeddings for classifier-free guidance
+# They need to have the same shape as the conditional text_embeddings (batch_size and seq_length)
+utext_input = tokenizer('')
+
+utext_input = utext_input.to(torch_device)
+
+utext_embeddings = model.encode_text(utext_input)
+uncond_embeddings=mmodel(utext_embeddings)
+
+# 9. concatenate both text_embeddings and uncond_embeddings into a single batch to avoid doing two forward passes
+mapping_embeddings = torch.cat([uncond_embeddings, mapping_embeddings])
+
+
+# 10. generate the initial random noise
+latents = torch.randn(
+    (batch_size, unet.in_channels, height // 8, width // 8),
+    generator=generator,
+)
+latents = latents.to(torch_device)
+
+# 11. initialize the scheduler with our chosen num_inference_steps.
+scheduler.set_timesteps(num_inference_steps)
+
+# 12. The K-LMS scheduler needs to multiply the latents by its sigma values. Let's do this here:
+latents = latents * scheduler.init_noise_sigma
+
+
+# 13. write the denoising loop
+from tqdm.auto import tqdm
+
+scheduler.set_timesteps(num_inference_steps)
+
+for t in tqdm(scheduler.timesteps):
+    # expand the latents if we are doing classifier-free guidance to avoid doing two forward passes.
+    latent_model_input = torch.cat([latents] * 2)
+
+    latent_model_input = scheduler.scale_model_input(latent_model_input, timestep=t)
+
+    # predict the noise residual
+    with torch.no_grad():
+        noise_pred = unet(latent_model_input, t, encoder_hidden_states=mapping_embeddings).sample
+
+    # perform guidance
+    noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+    noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+
+    # compute the previous noisy sample x_t -> x_t-1
+    latents = scheduler.step(noise_pred, t, latents).prev_sample
+
+
+# 14. use the vae to decode the generated latents back into the image
+latents = 1 / 0.18215 * latents
+with torch.no_grad():
+    image = vae.decode(latents).sample
+
+# 15. convert the image to PIL so we can display or save it
+
+image = (image / 2 + 0.5).clamp(0, 1)
+image = image.detach().cpu().permute(0, 2, 3, 1).numpy()
+images = (image * 255).round().astype("uint8")
+pil_images = Image.fromarray(images[0])
+print(pil_images)
+pil_images.save("example.png")
+print(pil_images)
