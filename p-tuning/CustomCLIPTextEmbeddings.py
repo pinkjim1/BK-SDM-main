@@ -3,18 +3,40 @@ import torch.nn as nn
 from typing import Optional
 from transformers.models.clip.modeling_clip import CLIPTextConfig, CLIPTextEmbeddings
 
+def dig_to_str(tensor_list):
+    return '_'.join([str(t.item()) for t in tensor_list])
+
 #virtual token
 class VirtualTokenManager(nn.Module):
-    def __init__(self, token_dim, categories, config:CLIPTextConfig):
+    def __init__(self, categories, pretrained_embeddings):
         super(VirtualTokenManager, self).__init__()
-        self.emb=nn.Embedding(config.vocab_size, token_dim)
-        self.virtual_tokens = nn.ParameterDict({str(category[1].item()):self.emb(category[1]) for category in categories})
+        self.emb = nn.Embedding.from_pretrained(pretrained_embeddings, freeze=True)
+        self.end=self.emb(torch.tensor([49407], dtype=torch.long).to('cuda'))
+        self.virtual_tokens = nn.ParameterDict()
+        for category in categories:
+            tem_arr=[]
+            for i in category[1:]:
+                if i !=49407:
+                    tem_arr.append(i)
+                else:
+                    break
+            self.virtual_tokens[dig_to_str(tem_arr)] = nn.Parameter(self.emb(torch.as_tensor(tem_arr, dtype=torch.long).to('cuda')))
 
 
     def forward(self, categories):
         batch_tokens = []
         for category in categories:
-            batch_tokens.append(self.virtual_tokens[str(category)])
+            tem_arr = []
+            left=0
+            for i, j in enumerate(category):
+                if j != 49407:
+                    tem_arr.append(j)
+                else:
+                    left=len(category)-i
+                    break
+            tem_tensor=self.virtual_tokens['_'.join([str(i) for i in tem_arr])]
+            tem_end=self.end.repeat(left+1,1)
+            batch_tokens.append(torch.cat((tem_tensor, tem_end.detach()), dim=0))
         # 返回所有虚拟 token 作为一个 batch
         return torch.stack(batch_tokens)
 
@@ -51,15 +73,13 @@ class CustomCLIPTextEmbeddings(CLIPTextEmbeddings):
         if inputs_embeds is None:
             inputs_embeds = self.token_embedding(input_ids)
 
-        categories = input_ids[:, 5].tolist()
-        virtual_token_embeds=self.virtual_tokens(categories)
-        inputs_embeds[:, 5, :]=self.virtual_tokens(categories)
-        print(virtual_token_embeds.shape)  # 确认形状是否正确
-        print(inputs_embeds[:, 5, :].shape)
+        categories = input_ids[:, 5:-1].tolist()
+        input_new= torch.cat([inputs_embeds[:, :5, :].detach(), self.virtual_tokens(categories)], dim=1)
+
 
 
         position_embeddings = self.position_embedding(position_ids)
-        embeddings = inputs_embeds + position_embeddings
+        embeddings = input_new + position_embeddings
 
         return embeddings
 

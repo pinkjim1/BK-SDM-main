@@ -111,7 +111,5 @@ image = image.detach().cpu().permute(0, 2, 3, 1).numpy()
 images = (image * 255).round().astype("uint8")
 pil_images = Image.fromarray(images[0])
 print(pil_images)
-pil_images.save("example.png")
+pil_images.save("example2.png")
 print(pil_images)
-
-
