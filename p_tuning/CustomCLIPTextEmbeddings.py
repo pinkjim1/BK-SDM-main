@@ -8,20 +8,31 @@ def dig_to_str(tensor_list):
 
 #virtual token
 class VirtualTokenManager(nn.Module):
-    def __init__(self, categories, pretrained_embeddings):
+    def __init__(self, categories=None, pretrained_embeddings=None):
         super(VirtualTokenManager, self).__init__()
-        self.emb = nn.Embedding.from_pretrained(pretrained_embeddings, freeze=True)
+        if pretrained_embeddings is None:
+            self.emb = nn.Embedding(49408, 1024).to('cuda')
+        else:
+            self.emb = nn.Embedding.from_pretrained(pretrained_embeddings, freeze=True)
         self.end=self.emb(torch.tensor([49407], dtype=torch.long).to('cuda'))
         self.virtual_tokens = nn.ParameterDict()
-        for category in categories:
-            tem_arr=[]
-            for i in category[1:]:
-                if i !=49407:
-                    tem_arr.append(i)
-                else:
-                    break
-            self.virtual_tokens[dig_to_str(tem_arr)] = nn.Parameter(self.emb(torch.as_tensor(tem_arr, dtype=torch.long).to('cuda')))
+        if categories is not None:
+            for category in categories:
+                tem_arr=[]
+                for i in category[1:]:
+                    if i !=49407:
+                        tem_arr.append(i)
+                    else:
+                        break
+                self.virtual_tokens[dig_to_str(tem_arr)] = nn.Parameter(self.emb(torch.as_tensor(tem_arr, dtype=torch.long).to('cuda')))
 
+    def load_from_state_dict(self, state_dict):
+        self.emb.load_state_dict({'weight': state_dict['emb.weight']})
+        self.end=self.emb(torch.tensor([49407], dtype=torch.long).to('cuda'))
+        for key in state_dict:
+            if key.startswith('virtual_tokens'):
+                token_key = key.split('.')[1]
+                self.virtual_tokens[token_key] = nn.Parameter(state_dict[key])
 
     def forward(self, categories):
         batch_tokens = []
@@ -73,8 +84,11 @@ class CustomCLIPTextEmbeddings(CLIPTextEmbeddings):
         if inputs_embeds is None:
             inputs_embeds = self.token_embedding(input_ids)
 
-        categories = input_ids[:, 5:-1].tolist()
-        input_new= torch.cat([inputs_embeds[:, :5, :].detach(), self.virtual_tokens(categories)], dim=1)
+        if input_ids[0][1] !=49407:
+            categories = input_ids[:, 5:-1].tolist()
+            input_new= torch.cat([inputs_embeds[:, :5, :].detach(), self.virtual_tokens(categories)], dim=1)
+        else:
+            input_new = inputs_embeds
 
 
 
