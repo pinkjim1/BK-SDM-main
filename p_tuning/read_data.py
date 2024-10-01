@@ -59,11 +59,9 @@ class CustomDataLoader(DataLoader):
             images, labels = batch
             pil_images = [Image.open(image_path).resize((512, 512)) for image_path in images]
             tem_text=[f"a photo of a {label}" for label in labels]
-            image_inputs=self.preprocess(images=pil_images, return_tensors="pt")
-            text_inputs = self.preprocess(text=tem_text, padding=True, return_tensors="pt")
-            image_inputs = image_inputs.to(self.device)
-            text_inputs = text_inputs.to(self.device)
-            yield image_inputs, text_inputs
+            return_value=self.preprocess(text=tem_text, images=pil_images, return_tensors="pt", padding=True)
+            return_value = return_value.to(self.device)
+            yield return_value
 
 
 

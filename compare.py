@@ -1,7 +1,11 @@
 from transformers import CLIPTextModel, CLIPTokenizer, AutoTokenizer
 from diffusers import AutoencoderKL, UNet2DConditionModel, PNDMScheduler
+from p_tuning.CustomCLIPTextEmbeddings import VirtualTokenManager, CustomCLIPTextEmbeddings
 import torch
+import transformers.models.clip.modeling_clip as clip_modeling
 from PIL import Image
+
+clip_modeling.CLIPTextEmbeddings=CustomCLIPTextEmbeddings
 
 # 1. Load the autoencoder model which will be used to decode the latents into image space.
 vae = AutoencoderKL.from_pretrained("bk-sdm-v2-small/vae", subfolder="vae")
@@ -9,6 +13,8 @@ vae = AutoencoderKL.from_pretrained("bk-sdm-v2-small/vae", subfolder="vae")
 # 2. Load the tokenizer and text encoder to tokenize and encode the text.
 tokenizer = CLIPTokenizer.from_pretrained("bk-sdm-v2-small/tokenizer")
 text_encoder = CLIPTextModel.from_pretrained("bk-sdm-v2-small/text_encoder")
+
+
 
 # 3. The UNet model for generating the latents.
 unet = UNet2DConditionModel.from_pretrained("bk-sdm-v2-small/unet", subfolder="unet")
@@ -25,9 +31,14 @@ vae.to(torch_device)
 text_encoder.to(torch_device)
 unet.to(torch_device)
 
+vt=VirtualTokenManager()
+vt.load_from_state_dict(torch.load('p_tuning/checkpoint/vt_checkpoint_10.pth'))
+vt.to(torch_device)
+
+text_encoder.text_model.embeddings.virtual_tokens=vt
 
 # 6. set parameters
-prompt = ["a photo of a tench"]
+prompt = ["a photo of a airplane"]
 
 height = 512                        # default height of Stable Diffusion
 width = 512                         # default width of Stable Diffusion
@@ -111,5 +122,5 @@ image = image.detach().cpu().permute(0, 2, 3, 1).numpy()
 images = (image * 255).round().astype("uint8")
 pil_images = Image.fromarray(images[0])
 print(pil_images)
-pil_images.save("example2.png")
+pil_images.save("new_ostrich_third.png")
 print(pil_images)

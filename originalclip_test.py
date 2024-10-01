@@ -27,7 +27,7 @@ unet.to(torch_device)
 
 
 # 6. set parameters
-prompt = ["a photo of a tench"]
+prompt = ["a photo of a ostrich"]
 
 height = 512                        # default height of Stable Diffusion
 width = 512                         # default width of Stable Diffusion
@@ -111,7 +111,7 @@ image = image.detach().cpu().permute(0, 2, 3, 1).numpy()
 images = (image * 255).round().astype("uint8")
 pil_images = Image.fromarray(images[0])
 print(pil_images)
-pil_images.save("example.png")
+pil_images.save("old_ostrich.png")
 print(pil_images)
 
 

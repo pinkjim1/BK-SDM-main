@@ -15,6 +15,7 @@ class VirtualTokenManager(nn.Module):
         else:
             self.emb = nn.Embedding.from_pretrained(pretrained_embeddings, freeze=True)
         self.end=self.emb(torch.tensor([49407], dtype=torch.long).to('cuda'))
+        self.zero = self.emb(torch.tensor([0], dtype=torch.long).to('cuda'))
         self.virtual_tokens = nn.ParameterDict()
         if categories is not None:
             for category in categories:
@@ -29,6 +30,7 @@ class VirtualTokenManager(nn.Module):
     def load_from_state_dict(self, state_dict):
         self.emb.load_state_dict({'weight': state_dict['emb.weight']})
         self.end=self.emb(torch.tensor([49407], dtype=torch.long).to('cuda'))
+        self.zero=self.emb(torch.tensor([0], dtype=torch.long).to('cuda'))
         for key in state_dict:
             if key.startswith('virtual_tokens'):
                 token_key = key.split('.')[1]
@@ -46,7 +48,11 @@ class VirtualTokenManager(nn.Module):
                     left=len(category)-i
                     break
             tem_tensor=self.virtual_tokens['_'.join([str(i) for i in tem_arr])]
-            tem_end=self.end.repeat(left+1,1)
+            tem_end=self.end
+            if left >0:
+                if left>1:
+                    tem_end=self.zero.repeat(left, 1) if category[len(category)-left+1]==0 else self.end.repeat(left, 1)
+                tem_end=torch.cat((self.end, tem_end), dim=0)
             batch_tokens.append(torch.cat((tem_tensor, tem_end.detach()), dim=0))
         # 返回所有虚拟 token 作为一个 batch
         return torch.stack(batch_tokens)
