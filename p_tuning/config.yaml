@@ -1,0 +1,26 @@
+model_path:
+  clip_model_path: "model/CLIP"
+  sd_model_path: "model/bk-sdm-v2-small"
+  save_model_path: "new_model"
+
+prompt_model:
+  lr: 0.001
+  batch_size: 8
+  num_epochs: 10
+  weight_decay: 0.001
+  save_freq: 2
+  round: 1
+
+inference_model:
+  image_num: 10
+  num_inference_steps: 50
+  guidance_scale: 7.5
+
+data:
+  dataset_type: "Cifar10"
+
+client:
+  num: 20
+
+
+

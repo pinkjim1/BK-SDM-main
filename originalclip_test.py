@@ -4,14 +4,14 @@ import torch
 from PIL import Image
 
 # 1. Load the autoencoder model which will be used to decode the latents into image space.
-vae = AutoencoderKL.from_pretrained("bk-sdm-v2-small/vae", subfolder="vae")
+vae = AutoencoderKL.from_pretrained("model/bk-sdm-v2-small/vae", subfolder="vae")
 
 # 2. Load the tokenizer and text encoder to tokenize and encode the text.
-tokenizer = CLIPTokenizer.from_pretrained("bk-sdm-v2-small/tokenizer")
-text_encoder = CLIPTextModel.from_pretrained("bk-sdm-v2-small/text_encoder")
+tokenizer = CLIPTokenizer.from_pretrained("model/bk-sdm-v2-small/tokenizer")
+text_encoder = CLIPTextModel.from_pretrained("model/bk-sdm-v2-small/text_encoder")
 
 # 3. The UNet model for generating the latents.
-unet = UNet2DConditionModel.from_pretrained("bk-sdm-v2-small/unet", subfolder="unet")
+unet = UNet2DConditionModel.from_pretrained("model/bk-sdm-v2-small/unet", subfolder="unet")
 
 
 # 4. load the K-LMS scheduler with some fitting parameters

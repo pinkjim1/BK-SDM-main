@@ -15,9 +15,9 @@ folder_list=['n01440764','n01443537', 'n01484850', 'n01491361','n01494475','n014
 clip_modeling.CLIPTextEmbeddings=CustomCLIPTextEmbeddings
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-model=CLIPModel.from_pretrained("../CLIP")
-processor = AutoProcessor.from_pretrained("../CLIP")
-tokenizer = CLIPTokenizer.from_pretrained("../CLIP")
+model=CLIPModel.from_pretrained("../model/CLIP")
+processor = AutoProcessor.from_pretrained("../model/CLIP")
+tokenizer = CLIPTokenizer.from_pretrained("../model/CLIP")
 
 
 model.to(device)

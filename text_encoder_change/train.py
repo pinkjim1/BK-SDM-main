@@ -27,8 +27,8 @@ mobile_model, _, _ = mobileclip.create_model_and_transforms('mobileclip_s2', pre
 mobile_model.to(device)
 
 # 生成 1024 维度嵌入的 CLIPTextModel 模型
-clip_tokenizer = CLIPTokenizer.from_pretrained("../bk-sdm-v2-small/tokenizer")
-clip_text_encoder = CLIPTextModel.from_pretrained("../bk-sdm-v2-small/text_encoder")
+clip_tokenizer = CLIPTokenizer.from_pretrained("../model/bk-sdm-v2-small/tokenizer")
+clip_text_encoder = CLIPTextModel.from_pretrained("../model/bk-sdm-v2-small/text_encoder")
 clip_text_encoder.to(device)
 
 

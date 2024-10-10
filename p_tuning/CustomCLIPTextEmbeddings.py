@@ -18,14 +18,24 @@ class VirtualTokenManager(nn.Module):
         self.zero = self.emb(torch.tensor([0], dtype=torch.long).to('cuda'))
         self.virtual_tokens = nn.ParameterDict()
         if categories is not None:
-            for category in categories:
-                tem_arr=[]
-                for i in category[1:]:
-                    if i !=49407:
+            if categories.dim() == 2:
+                for category in categories:
+                    tem_arr=[]
+                    for i in category[1:]:
+                        if i !=49407:
+                            tem_arr.append(i)
+                        else:
+                            break
+                    self.virtual_tokens[dig_to_str(tem_arr)] = nn.Parameter(self.emb(torch.as_tensor(tem_arr, dtype=torch.long).to('cuda')))
+            else:
+                tem_arr = []
+                for i in categories[1:]:
+                    if i != 49407:
                         tem_arr.append(i)
                     else:
                         break
-                self.virtual_tokens[dig_to_str(tem_arr)] = nn.Parameter(self.emb(torch.as_tensor(tem_arr, dtype=torch.long).to('cuda')))
+                self.virtual_tokens[dig_to_str(tem_arr)] = nn.Parameter(
+                    self.emb(torch.as_tensor(tem_arr, dtype=torch.long).to('cuda')))
 
     def load_from_state_dict(self, state_dict):
         self.emb.load_state_dict({'weight': state_dict['emb.weight']})
