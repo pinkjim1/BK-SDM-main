@@ -6,9 +6,8 @@ class SupConLoss(nn.Module):
         super(SupConLoss, self).__init__()
         self.device = device
         self.temperature = 1.0
-    def forward(self, logits):
+    def forward(self, logits, p_index):
         batch_size = logits.size(0)
-        mask = torch.ones(batch_size, batch_size, dtype=torch.float32).to(self.device).detach()
         # for numerical stability
         exp_logits = torch.exp(logits)
         log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True))

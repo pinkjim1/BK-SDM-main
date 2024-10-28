@@ -14,6 +14,7 @@ class VirtualTokenManager(nn.Module):
             self.emb = nn.Embedding(49408, 1024).to('cuda')
         else:
             self.emb = nn.Embedding.from_pretrained(pretrained_embeddings, freeze=True)
+        self.emb.weight.requires_grad = False
         self.end=self.emb(torch.tensor([49407], dtype=torch.long).to('cuda'))
         self.zero = self.emb(torch.tensor([0], dtype=torch.long).to('cuda'))
         self.virtual_tokens = nn.ParameterDict()
@@ -26,7 +27,7 @@ class VirtualTokenManager(nn.Module):
                             tem_arr.append(i)
                         else:
                             break
-                    self.virtual_tokens[dig_to_str(tem_arr)] = nn.Parameter(self.emb(torch.as_tensor(tem_arr, dtype=torch.long).to('cuda')))
+                    self.virtual_tokens[dig_to_str(tem_arr)] = nn.Parameter(self.emb(torch.as_tensor(tem_arr, dtype=torch.long).clone().to('cuda')))
             else:
                 tem_arr = []
                 for i in categories[1:]:
@@ -35,7 +36,7 @@ class VirtualTokenManager(nn.Module):
                     else:
                         break
                 self.virtual_tokens[dig_to_str(tem_arr)] = nn.Parameter(
-                    self.emb(torch.as_tensor(tem_arr, dtype=torch.long).to('cuda')))
+                    self.emb(torch.as_tensor(tem_arr, dtype=torch.long).clone().to('cuda')))
 
     def load_from_state_dict(self, state_dict):
         self.emb.load_state_dict({'weight': state_dict['emb.weight']})
@@ -61,7 +62,7 @@ class VirtualTokenManager(nn.Module):
             tem_end=self.end
             if left >0:
                 if left>1:
-                    tem_end=self.zero.repeat(left, 1) if category[len(category)-left+1]==0 else self.end.repeat(left, 1)
+                    tem_end=self.zero.repeat(left+(len(tem_arr)-tem_tensor.size(0)), 1) if category[len(category)-left+1]==0 else self.end.repeat(left, 1)
                 tem_end=torch.cat((self.end, tem_end), dim=0)
             batch_tokens.append(torch.cat((tem_tensor, tem_end.detach()), dim=0))
         # 返回所有虚拟 token 作为一个 batch
@@ -102,14 +103,20 @@ class CustomCLIPTextEmbeddings(CLIPTextEmbeddings):
 
         if input_ids[0][1] !=49407:
             categories = input_ids[:, 5:-1].tolist()
-            input_new= torch.cat([inputs_embeds[:, :5, :].detach(), self.virtual_tokens(categories)], dim=1)
+            try:
+                input_new= torch.cat([inputs_embeds[:, :5, :].detach(), self.virtual_tokens(categories)], dim=1)
+            except TypeError as e:
+                print(e)
         else:
             input_new = inputs_embeds
 
 
 
         position_embeddings = self.position_embedding(position_ids)
-        embeddings = input_new + position_embeddings
+        try:
+            embeddings = input_new + position_embeddings
+        except RuntimeError as e:
+            print(e)
 
         return embeddings
 
