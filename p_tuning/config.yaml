@@ -5,21 +5,22 @@ model_path:
 
 prompt_model:
   lr: 0.001
-  batch_size: 16
+  batch_size: 8
   num_epochs: 2
   weight_decay: 0.001
   save_freq: 2
-  round: 1
+  round: 50
+  snr_gamma: 1
 
 inference_model:
-  image_num: 10
+  image_num: 2
   num_inference_steps: 50
   guidance_scale: 7.5
   save_image_path: "new_image"
 
 image_encoder:
-  lr: 0.001
-  batch_size: 16
+  lr: 0.0001
+  batch_size: 8
   num_epochs: 2
   weight_decay: 0.001
   save_freq: 2
@@ -30,7 +31,7 @@ image_encoder:
 
 
 data:
-  dataset_type: "Cifar10"
+  dataset_type: "Tiny-imagenet"
 
 client:
   num: 20

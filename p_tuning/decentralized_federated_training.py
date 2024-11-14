@@ -12,14 +12,16 @@ def decentralized_federated_learning(clients, config_file):
 
         # 每个客户端在本地训练模型
         for client in clients:
-            # client.model_test(is_trained=False)
+            if round ==0:
+                client.model_test(is_trained=False)
             client.prompt_train()
 
         # 每个客户端与其他客户端交换并聚合模型
         for client in clients:
             client.exchange_message_and_generate([c for c in clients if c != client])
             client.image_encoder_train()
-            client.model_test(is_trained=True)
+            if round%5==0:
+                client.model_test(is_trained=True)
 
         print("Models exchanged and aggregated.")
 

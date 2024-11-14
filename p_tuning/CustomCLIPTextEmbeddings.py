@@ -51,14 +51,14 @@ class VirtualTokenManager(nn.Module):
         batch_tokens = []
         for category in categories:
             tem_arr = []
-            left=0
+            c_len = len(category)
             for i, j in enumerate(category):
                 if j != 49407:
                     tem_arr.append(j)
                 else:
-                    left=len(category)-i
                     break
             tem_tensor=self.virtual_tokens['_'.join([str(i) for i in tem_arr])]
+            left=c_len-len(tem_tensor)
             tem_end=self.end
             if left >0:
                 if left>1:
@@ -105,7 +105,7 @@ class CustomCLIPTextEmbeddings(CLIPTextEmbeddings):
             categories = input_ids[:, 5:-1].tolist()
             try:
                 input_new= torch.cat([inputs_embeds[:, :5, :].detach(), self.virtual_tokens(categories)], dim=1)
-            except TypeError as e:
+            except RuntimeError as e:
                 print(e)
         else:
             input_new = inputs_embeds

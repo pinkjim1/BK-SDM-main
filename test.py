@@ -1,22 +1,27 @@
-import numpy as np
-import os
 import torch
-from transformers import CLIPTokenizer
+import torch.nn as nn
+import yaml
+from p_tuning.CustomCLIPTextEmbeddings import VirtualTokenManager, CustomCLIPTextEmbeddings
+from p_tuning.decentralized_federated_training import decentralized_federated_learning
+from p_tuning.test import test_federated_learning
+from p_tuning.singal_client_test import Client
+from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.tensorboard import SummaryWriter
+from torch.utils.tensorboard import SummaryWriter
 
-cliptokenizer = CLIPTokenizer.from_pretrained("model/CLIP")
-client_id=0
-round=0
 
-tem_index = f"{client_id}_{round}"
-text_inputs = cliptokenizer(tem_index, padding=True, return_tensors="pt")
+writer = SummaryWriter('runs/single_client_test')
 
-tem_arr = []
-for i in text_inputs['input_ids'][0][1:]:
-    if i != 49407:
-        tem_arr.append(i)
-    else:
-        break
-tt='_'.join([str(t.item()) for t in tem_arr])
-print(tt)
+config_file="p_tuning/config.yaml"
 
-# 打印图像和标签的形状
+id=1
+client1=Client(id, config_file, writer)
+
+with open(config_file, 'r') as file:
+    config = yaml.safe_load(file)
+
+client1.model_test(is_trained=False)
+round=10
+for i in range(round):
+    client1.image_encoder_train()
+    client1.model_test(is_trained=True)

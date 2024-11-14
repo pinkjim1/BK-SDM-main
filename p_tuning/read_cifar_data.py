@@ -2,6 +2,7 @@ from PIL import Image
 import os
 from torch.utils.data import Dataset, DataLoader
 import torchvision.transforms as transforms
+import torch
 
 
 
@@ -9,8 +10,8 @@ import torchvision.transforms as transforms
 class CustomImageDataset(Dataset):
     def __init__(self, images, labels, filter_labels):
 
-        self.images = images  # 存储所有图片的路径
-        self.labels = labels # 存储图片对应的标签（文件夹名）
+        self.images = images
+        self.labels = labels
         self.filter_labels = filter_labels
         self.append_image=[]
         self.append_label=[]
@@ -55,4 +56,32 @@ class CustomDataLoader(DataLoader):
             return_value = return_value.to(self.device)
             yield return_value
 
+
+class CustomSDDataLoader(DataLoader):
+    def __init__(self, dataset, batch_size=4, shuffle=True, preprocess=None, device='cpu', **kwargs):
+        super().__init__(dataset, batch_size=batch_size, shuffle=shuffle, **kwargs)
+        self.preprocess = preprocess
+        self.device = device
+
+    def __iter__(self):
+        # 自定义迭代器
+        for batch in super().__iter__():
+            images_path, labels = batch
+            filtered_images = []
+            filtered_labels = []
+            for image_path, label in zip(images_path, labels):
+                image = Image.open(image_path)
+                filtered_images.append(image)
+                prompt=f'a photo of a {label}'
+                filtered_labels.append(prompt)
+
+            pre=transforms.Compose([
+                transforms.Resize((512, 512)),
+                transforms.ToTensor(),
+                transforms.Normalize([0.5], [0.5])
+            ])
+            batch_tensor_images = torch.stack([pre(image) for image in filtered_images]).to(self.device)
+            return_labels = self.preprocess(text=filtered_labels,padding="max_length", return_tensors="pt").to(self.device)
+
+            yield return_labels, batch_tensor_images
 

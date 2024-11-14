@@ -6,16 +6,19 @@ import os
 import torch.nn as nn
 import yaml
 import torch.optim as optim
+import copy
+import json
 import random
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import pandas as pd
+import diffusers
 from tqdm.auto import tqdm
 from transformers import CLIPTokenizer, AutoProcessor, AutoTokenizer,CLIPTextConfig
 from .CustomCLIPTextEmbeddings import VirtualTokenManager, CustomCLIPTextEmbeddings
 from transformers.models.clip.modeling_clip import CLIPTextModel, CLIPModel, CLIPVisionModel
 from diffusers import AutoencoderKL, UNet2DConditionModel, PNDMScheduler, StableDiffusionPipeline
-from .read_cifar_data import CustomImageDataset, CustomDataLoader
+from .read_cifar_data import CustomImageDataset, CustomDataLoader, CustomSDDataLoader
 from .read_combine_data import CustomCombineImageDataset, CustomCombineDataLoader
 from peft import LoraConfig, PeftModel, get_peft_model
 from sklearn.cluster import KMeans
@@ -25,7 +28,7 @@ from PIL import Image
 
 
 class Client:
-    def __init__(self, client_id, config_file):
+    def __init__(self, client_id, config_file, writer):
         with open(config_file, 'r') as file:
             config = yaml.safe_load(file)
         clip_modeling.CLIPTextEmbeddings = CustomCLIPTextEmbeddings
@@ -38,6 +41,7 @@ class Client:
         self.prompt_model_weight_decay=config['prompt_model']['weight_decay']
         self.prompt_model_num_epochs=config['prompt_model']['num_epochs']
         self.prompt_model_save_freq=config['prompt_model']['save_freq']
+        self.prompt_snr_gamma=config['prompt_model']['snr_gamma']
 
         self.num_inference_steps=config['inference_model']['num_inference_steps']
         self.guidance_scale=config['inference_model']['guidance_scale']
@@ -61,7 +65,7 @@ class Client:
         if self.dataset_type == 'Cifar10':
             self.type_list = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
             self.k=10
-        else:
+        elif self.dataset_type=='Cifar100':
             self.type_list = [
                 'apple', 'aquarium_fish', 'baby', 'bear', 'beaver', 'bed', 'bee', 'beetle', 'bicycle', 'bottle',
                 'bowl', 'boy', 'bridge', 'bus', 'butterfly', 'camel', 'can', 'castle', 'caterpillar', 'cattle',
@@ -78,6 +82,10 @@ class Client:
                 'train', 'trout', 'tulip', 'turtle', 'wardrobe', 'whale', 'willow_tree', 'wolf', 'woman', 'worm'
             ]
             self.k=100
+        else:
+            with open('P_tuning/Tinyimagenet.json', 'r', encoding='utf-8') as file:
+                self.type_list= json.load(file)
+            self.k=200
 
         # clip and stable-diffusion model
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -90,6 +98,8 @@ class Client:
         test_data_dir = os.path.join('dataset', self.dataset_type, 'test', str(self.client_id)+'.npz')
         self.train_image, self.train_label=self.load_data(train_data_dir, 'train')
         self.test_image, self.test_label=self.load_data(test_data_dir, 'test')
+
+        self.writer=writer
 
         #prompt
         self.train_prompt=list(set(self.train_label))
@@ -158,6 +168,7 @@ class Client:
         self.set_requires_grad(grad_keys)
         optimizer = optim.AdamW(self.vt.virtual_tokens.parameters(), lr=self.prompt_model_lr, weight_decay=self.prompt_model_weight_decay)
 
+
         train_dataset = CustomImageDataset(self.train_image, self.train_label,filter_labels=self.train_prompt[self.prompt_index])
 
         total_label = [f'a photo of a {label}' for label in self.train_prompt]
@@ -171,16 +182,90 @@ class Client:
                 loss.backward()  # 清空上一步的梯度 # 计算梯度
                 optimizer.step()
                 print(loss.item())
+                # self.writer.add_scalar(f'Client_{self.client_id}/round_{self.round}/Prompt_Training_Loss', loss.item(), epoch)
             print(f"Epoch[{epoch}/{self.prompt_model_num_epochs}], Loss: {loss.item():.4f}")
             if (epoch + 1) % self.prompt_model_save_freq == 0:
                 tem_save_path=os.path.join(self.save_model_path, self.dataset_type,str(self.client_id), str(self.prompt_index), self.train_prompt[self.prompt_index], f"checkpoint_{epoch+1}.pth")
                 os.makedirs(os.path.dirname(tem_save_path), exist_ok=True)
                 torch.save(self.vt.state_dict(), tem_save_path)
         self.emb_message=nn.Parameter(self.vt.virtual_tokens[grad_keys].clone(), requires_grad=False)
+
         del clipmodel
         torch.cuda.empty_cache()
 
-    def collect_message(self,messages, client_id, round):
+    def sd_prompt_train(self):
+        vae = AutoencoderKL.from_pretrained(self.sd_model_path, subfolder="vae").to(self.device)
+        vae.requires_grad_(False)
+
+        tokenizer = CLIPTokenizer.from_pretrained(self.sd_model_path, subfolder="tokenizer")
+        text_encoder = CLIPTextModel.from_pretrained(self.sd_model_path, subfolder="text_encoder").to(self.device)
+        text_encoder.requires_grad_(False)
+
+        unet = UNet2DConditionModel.from_pretrained(self.sd_model_path, subfolder="unet").to(self.device)
+        unet.requires_grad_(False)
+
+        scheduler = PNDMScheduler.from_pretrained(self.sd_model_path, subfolder="scheduler")
+
+        text_encoder.text_model.embeddings.virtual_tokens = self.vt
+        self.prompt_index = (self.prompt_index + 1) % len(self.train_prompt)
+        self.round += 1
+        grad_index = self.text_inputs[self.prompt_index]
+        tem_arr = []
+        for i in grad_index[1:]:
+            if i != 49407:
+                tem_arr.append(i)
+            else:
+                break
+        grad_keys = '_'.join([str(t.item()) for t in tem_arr])
+        self.set_requires_grad(grad_keys)
+        optimizer = optim.AdamW(self.vt.virtual_tokens.parameters(), lr=self.prompt_model_lr,
+                                weight_decay=self.prompt_model_weight_decay)
+
+        train_dataset = CustomImageDataset(self.train_image, self.train_label,
+                                           filter_labels=self.train_prompt[self.prompt_index])
+        dataloader = CustomSDDataLoader(train_dataset, batch_size=self.prompt_model_batch_size, shuffle=True,
+                                      preprocess=tokenizer, device=self.device)
+        for epoch in range(self.prompt_model_num_epochs):
+            for labels, images in dataloader:
+                latents = vae.encode(images).latent_dist.sample()
+                latents = latents * vae.config.scaling_factor
+
+                noise = torch.randn_like(latents)
+                timesteps = torch.randint(0, scheduler.config.num_train_timesteps, (1,), device=self.device)
+                timesteps = timesteps.long()
+
+                noisy_latents = scheduler.add_noise(latents, noise, timesteps)
+
+                encoder_hidden_states = text_encoder(labels.input_ids, return_dict=False)[0]
+
+                model_pred = unet(noisy_latents, timesteps, encoder_hidden_states, return_dict=False)[0]
+
+                alphas_cumprod = scheduler.alphas_cumprod.to(self.device)  # α_t 表
+                alpha_t = alphas_cumprod[timesteps]
+                snr = alpha_t / (1 - alpha_t)
+                mse_loss_weights = torch.stack([snr, self.prompt_snr_gamma * torch.ones_like(timesteps)], dim=1).min(dim=1)[0]
+                mse_loss_weights = mse_loss_weights / snr
+
+                loss = F.mse_loss(model_pred.float(), noise.float(), reduction="none")
+                loss = loss.mean(dim=list(range(1, len(loss.shape)))) * mse_loss_weights
+                loss = loss.mean()
+
+                optimizer.zero_grad()
+                loss.backward()  # 清空上一步的梯度 # 计算梯度
+                optimizer.step()
+                print(loss.item())
+            print(f"Epoch[{epoch}/{self.prompt_model_num_epochs}], Loss: {loss.item():.4f}")
+            if (epoch + 1) % self.prompt_model_save_freq == 0:
+                tem_save_path=os.path.join(self.save_model_path, self.dataset_type,str(self.client_id), str(self.prompt_index), self.train_prompt[self.prompt_index], f"checkpoint_{epoch+1}.pth")
+                os.makedirs(os.path.dirname(tem_save_path), exist_ok=True)
+                torch.save(self.vt.state_dict(), tem_save_path)
+        self.emb_message=nn.Parameter(self.vt.virtual_tokens[grad_keys].clone(), requires_grad=False)
+        del vae, text_encoder, unet
+        torch.cuda.empty_cache()
+
+
+
+    def collect_message(self,messages, client_id, round, train_index):
         cliptokenizer = CLIPTokenizer.from_pretrained(self.clip_model_path)
         emb=messages.clone()
         emb=emb.to(self.device)
@@ -194,7 +279,7 @@ class Client:
             else:
                 break
         tt='_'.join([str(t.item()) for t in tem_arr])
-        self.message_type[tem_index]=-1
+        self.message_type[tem_index]=train_index+self.k
         self.vt.virtual_tokens[tt] = emb
 
     def inference(self, this_round_message):
@@ -224,33 +309,50 @@ class Client:
                         numpy_array]
         num=np.stack(padded_array, axis=0)
         num_flattened = num.reshape(num.shape[0], -1)
-        init_centers = num_flattened[:10]
-        kmeans = KMeans(n_clusters=10, init=init_centers, n_init=1)
+        init_centers = num_flattened[:100]
+        kmeans = KMeans(n_clusters=100, init=init_centers, n_init=1)
         labels = kmeans.fit_predict(num_flattened)
         for key, label in zip(self.message_type.keys(), labels):
             self.message_type[key]=label
 
 
     def image_encoder_train(self):
-        self.cluster()
-        lora_config = LoraConfig(
-            r=self.lora_r,
-            lora_alpha=self.lora_alpha,
-            lora_dropout=self.lora_dropout,
-            target_modules=self.target_modules,
-        )
+        # self.cluster()
         clipmodel = CLIPModel.from_pretrained(self.clip_model_path).to(self.device)
         clipprocessor = AutoProcessor.from_pretrained(self.clip_model_path)
         clip_vision_model = CLIPVisionModel.from_pretrained(self.clip_model_path).to(self.device)
         clipmodel.text_model.embeddings.virtual_tokens = self.vt
-        new_vision_model = get_peft_model(clip_vision_model, lora_config)
         for param in clipmodel.parameters():
             param.requires_grad = False
+        if self.round==0:
+            lora_config = LoraConfig(
+                r=self.lora_r,
+                lora_alpha=self.lora_alpha,
+                lora_dropout=self.lora_dropout,
+                target_modules=self.target_modules,
+            )
+            new_vision_model = get_peft_model(clip_vision_model, lora_config)
+        else:
+            tem_save_path = os.path.join(self.save_model_path, "image_encoder", self.dataset_type,
+                                         str(self.client_id) + "_client_id")
+            new_vision_model = PeftModel.from_pretrained(clip_vision_model, tem_save_path)
+            for name, param in new_vision_model.named_parameters():
+                if "lora_A" in name or "lora_B" in name:  # 根据名称设置条件
+                    param.requires_grad = True
+                else:
+                    param.requires_grad = False
+            new_vision_model.train()
         clipmodel.vision_model=new_vision_model
         optimizer = optim.AdamW(new_vision_model.parameters(), lr=self.image_encoder_lr, weight_decay=self.image_encoder_weight_decay)
-        image_dataset=CustomCombineImageDataset(self.train_image, self.train_label,self.generated_messages)
+
+
+        image_dataset=CustomCombineImageDataset(self.train_image, self.train_label, self.generated_messages)
+        tem_total_labels= copy.deepcopy(self.type_list)
+        for label in self.this_round_message:
+            tem_total_labels.append(label)
         image_dataloader = CustomCombineDataLoader(image_dataset, batch_size=self.image_encoder_batch_size, shuffle=True,
-                                      preprocess=clipprocessor, total_labels=self.type_list,message_type=self.message_type, device=self.device)
+                                      preprocess=clipprocessor, total_labels=tem_total_labels,message_type=self.message_type, device=self.device)
+        print(f'{self.client_id}_{self.round} image encoder train start')
         for epoch in range(self.image_encoder_num_epochs):
             for return_value, labels in image_dataloader:
                 logit = clipmodel(**return_value)
@@ -259,9 +361,10 @@ class Client:
                 loss.backward()  # 清空上一步的梯度 # 计算梯度
                 optimizer.step()
                 print(loss.item())
+            # self.writer.add_scalar(f'Client_{self.client_id}/round_{self.round}/image_encoderTraining_Loss', loss.item(), epoch)
             print(f"Epoch[{epoch}/{self.prompt_model_num_epochs}], Loss: {loss.item():.4f}")
         tem_save_path = os.path.join(self.save_model_path, "image_encoder", self.dataset_type,
-                                     str(self.client_id) + "_client_id", str(self.round) + "_round")
+                                     str(self.client_id) + "_client_id")
         os.makedirs(os.path.dirname(tem_save_path), exist_ok=True)
         new_vision_model.save_pretrained(tem_save_path)
         del clipmodel
@@ -270,13 +373,13 @@ class Client:
 
     def exchange_message_and_generate(self, other_clients):
 
-        this_round_message=[]
-        for neighbor in other_clients:
-            self.collect_message(neighbor.emb_message, neighbor.client_id, neighbor.round)
+        self.this_round_message=[]
+        for i, neighbor in enumerate(other_clients):
+            self.collect_message(neighbor.emb_message, neighbor.client_id, neighbor.round, i)
             tem_index=f'{neighbor.client_id}_{neighbor.round}'
-            this_round_message.append(tem_index)
+            self.this_round_message.append(tem_index)
 
-        self.generated_messages = self.inference(this_round_message)
+        self.generated_messages = self.inference(self.this_round_message)
 
     def model_test(self, is_trained=False):
         clipmodel = CLIPModel.from_pretrained(self.clip_model_path).to(self.device)
@@ -285,7 +388,7 @@ class Client:
         if is_trained:
             clip_vision_model = CLIPVisionModel.from_pretrained(self.clip_model_path).to(self.device)
             tem_save_path = os.path.join(self.save_model_path, "image_encoder", self.dataset_type,
-                                         str(self.client_id) + "_client_id", str(self.round) + "_round")
+                                         str(self.client_id) + "_client_id")
             new_vision_model = PeftModel.from_pretrained(clip_vision_model, tem_save_path)
             clipmodel.vision_model = new_vision_model
         clipmodel.eval()
@@ -296,12 +399,12 @@ class Client:
                                                    message_type=self.message_type, device=self.device)
         correct_predictions = 0
         total_samples = 0
-
-        for return_value, labels in image_dataloader:
-            logit = clipmodel(**return_value)
-            predictions = logit.logits_per_image.argmax(dim=-1)
-            correct_predictions += (predictions == labels).sum().item()
-            total_samples += len(labels)
+        with torch.no_grad():
+            for return_value, labels in image_dataloader:
+                logit = clipmodel(**return_value)
+                predictions = logit.logits_per_image.argmax(dim=-1)
+                correct_predictions += (predictions == labels).sum().item()
+                total_samples += len(labels)
 
         accuracy = correct_predictions / total_samples
         if os.path.exists(self.test_result_address):
@@ -316,6 +419,7 @@ class Client:
         else:
             new_row = {"client_id": self.client_id, "round": self.round, "accuracy": accuracy}
             df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+        self.writer.add_scalar(f'Client_{self.client_id}/accuracy', accuracy, self.round)
         df.to_csv(self.test_result_address, index=False)
         del clipmodel
         torch.cuda.empty_cache()
