@@ -10,7 +10,7 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.utils.tensorboard import SummaryWriter
 
 
-writer = SummaryWriter('runs/federated_learning')
+writer = SummaryWriter('runs/federated_learning8')
 
 config_file="p_tuning/config.yaml"
 
@@ -24,9 +24,9 @@ def create_clients(num_clients, config_file, writer):
 with open(config_file, 'r') as file:
     config = yaml.safe_load(file)
 
-# 创建客户端
+# create clients
 num_clients = config['client']['num']
 clients = create_clients(num_clients, config_file, writer)
 
-# 运行去中心化联邦学习
+
 clients = decentralized_federated_learning(clients, config_file)

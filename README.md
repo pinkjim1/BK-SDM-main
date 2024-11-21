@@ -1,26 +1,54 @@
-总体介绍：
-
-mid_test.py为总体运行文件，所有的client的内容在p_tuning文件夹中。如果需要修改训练参数可以直接修改p_tuning中的config.yaml文件
-
-本实验需要两个模型，在model文件夹下创建两个文件夹“CLIP”和“bk-sdm-v2-small”。
-
-dataset参考 https://github.com/TsingZ0/PFLlib 生成数据
+# still dont know name
 
 
-总体代码流程：
-创建client-》测试正确率-》训练prompt-》训练image encoder-》再测试正确率
+---
 
-2-4步循环···
+## Project Overview
 
-测试结果在根目录的results.csv下
+This project includes:
+- **Data Partitioning**: 
+    Splitting the dataset into multiple clients to simulate distributed environments.
+- **Federated Training Process**: 
+  1. Training **local embeddings** on each client using their private datasets.  
+  2. Sharing embeddings between clients to facilitate collaborative learning.  
+  3. Utilizing shared embeddings to collaboratively train a local **image encoder**.
 
-目前模型的缺陷：
+---
 
-1 只能进行cifar10 cifar100的测试和训练（读取的问题，这个应该很快能解决）
-2 prompt learning的模型是clip，不是sd（略难）
-3 cluster还是普通的cluster（略难）
-4 流程固定（其实单独写一个测试也ok，但是我感觉还是有点麻烦，还不如自动测试自动记录）
+## Installation
+```bash
+conda create -n your_name python=3.8
+conda activate your_name
+git clone https://github.com/pinkjim1/BK-SDM-main
+cd BK-SDM
+pip install -r requirements.txt
+```
+
+Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+## Data Partitioning
+The code for generating data distributions is sourced from the following Git repository  https://github.com/TsingZ0/PFLlib
+
+For details on the generation method, please refer to the repository. In this experiment, the same method is used to generate data for different clients.
 
 
-有些奇葩的地方：
-在不独立同分布的client上，因为有些client可能只有两个图片种类，然后正确率就可能会特别高，loss可能会是0.。。
+## Federated Training
+
+- The parameter file is located in `p_tuning/config.yaml`. 
+- You can directly run `train.py` in the root folder to start training.The overall workflow is as follows:
+  1. **Local Training on Each Client:** Each client performs local training using its private data. During this step, all other parameters of the CLIP model are kept fixed, and only the embeddings corresponding to specific images are trained.
+  2. **Broadcasting Embeddings:** After each round of training, the locally trained embeddings are broadcast to all other clients.
+  3. **Image Generation Using Embeddings:** Upon receiving embeddings from different clients, the BKSDM diffusion model is used to generate images based on these embeddings.
+  4. **Training the Image Encoder:** The generated image-embedding pairs are mixed with the local image-text pairs, and the combined dataset is used to train the image encoder of the CLIP model.
+
+
+
+
+
+
+
+
+

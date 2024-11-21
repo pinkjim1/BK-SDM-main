@@ -59,6 +59,7 @@ class Client:
         self.lora_alpha=config['image_encoder']['lora_alpha']
         self.lora_dropout=config['image_encoder']['lora_dropout']
         self.target_modules=config['image_encoder']['target_modules']
+        self.generated_images_weights=config['image_encoder']['generated_images_weights']
 
         self.test_result_address=config['test_result']['test_result_address']
 
@@ -97,7 +98,28 @@ class Client:
         train_data_dir = os.path.join('dataset', self.dataset_type, 'train', str(self.client_id)+'.npz')
         test_data_dir = os.path.join('dataset', self.dataset_type, 'test', str(self.client_id)+'.npz')
         self.train_image, self.train_label=self.load_data(train_data_dir, 'train')
-        self.test_image, self.test_label=self.load_data(test_data_dir, 'test')
+
+        def numeric_sort(file_name):
+            return int(file_name.split('_')[1].split('.')[0])
+
+        if self.dataset_type=='Tiny-imagenet':
+            self.test_image = []
+            val_data_dir=os.path.join('dataset', self.dataset_type, 'rawdata', 'tiny-imagenet-200', 'val', 'images')
+            for root, dirs, files in os.walk(val_data_dir):
+                for file in sorted(files, key=numeric_sort):
+                    file_path = os.path.join(root, file)
+                    self.test_image.append(file_path)
+            with open('P_tuning/Tinylist.json', 'r', encoding='utf-8') as file:
+                label_dict= json.load(file)
+            val_labal_dir=os.path.join('dataset', self.dataset_type, 'rawdata', 'tiny-imagenet-200', 'val', 'val_annotations.txt')
+            self.test_label = []
+            with open(val_labal_dir, 'r') as file:
+                for line in file:
+                    parts = line.split()
+                    category_id = parts[1]
+                    self.test_label.append(label_dict[category_id])
+        else:
+            self.test_image, self.test_label=self.load_data(test_data_dir, 'test')
 
         self.writer=writer
 
@@ -179,7 +201,7 @@ class Client:
                 labels=torch.tensor([self.prompt_index]*logit.logits_per_image.size(0)).to(device=self.device)
                 loss = F.cross_entropy(logit.logits_per_image, labels)
                 optimizer.zero_grad()
-                loss.backward()  # 清空上一步的梯度 # 计算梯度
+                loss.backward()
                 optimizer.step()
                 print(loss.item())
                 # self.writer.add_scalar(f'Client_{self.client_id}/round_{self.round}/Prompt_Training_Loss', loss.item(), epoch)
@@ -251,7 +273,7 @@ class Client:
                 loss = loss.mean()
 
                 optimizer.zero_grad()
-                loss.backward()  # 清空上一步的梯度 # 计算梯度
+                loss.backward()
                 optimizer.step()
                 print(loss.item())
             print(f"Epoch[{epoch}/{self.prompt_model_num_epochs}], Loss: {loss.item():.4f}")
@@ -309,8 +331,8 @@ class Client:
                         numpy_array]
         num=np.stack(padded_array, axis=0)
         num_flattened = num.reshape(num.shape[0], -1)
-        init_centers = num_flattened[:100]
-        kmeans = KMeans(n_clusters=100, init=init_centers, n_init=1)
+        init_centers = num_flattened[:self.k]
+        kmeans = KMeans(n_clusters=self.k, init=init_centers, n_init=1, max_iter=1)
         labels = kmeans.fit_predict(num_flattened)
         for key, label in zip(self.message_type.keys(), labels):
             self.message_type[key]=label
@@ -337,28 +359,28 @@ class Client:
                                          str(self.client_id) + "_client_id")
             new_vision_model = PeftModel.from_pretrained(clip_vision_model, tem_save_path)
             for name, param in new_vision_model.named_parameters():
-                if "lora_A" in name or "lora_B" in name:  # 根据名称设置条件
+                if "lora_A" in name or "lora_B" in name:
                     param.requires_grad = True
                 else:
                     param.requires_grad = False
             new_vision_model.train()
         clipmodel.vision_model=new_vision_model
         optimizer = optim.AdamW(new_vision_model.parameters(), lr=self.image_encoder_lr, weight_decay=self.image_encoder_weight_decay)
-
-
-        image_dataset=CustomCombineImageDataset(self.train_image, self.train_label, self.generated_messages)
-        tem_total_labels= copy.deepcopy(self.type_list)
+        tem_total_labels = copy.deepcopy(self.type_list)
         for label in self.this_round_message:
             tem_total_labels.append(label)
+
+        image_dataset=CustomCombineImageDataset(self.train_image, self.train_label, self.generated_messages, self.generated_images_weights)
         image_dataloader = CustomCombineDataLoader(image_dataset, batch_size=self.image_encoder_batch_size, shuffle=True,
                                       preprocess=clipprocessor, total_labels=tem_total_labels,message_type=self.message_type, device=self.device)
         print(f'{self.client_id}_{self.round} image encoder train start')
         for epoch in range(self.image_encoder_num_epochs):
-            for return_value, labels in image_dataloader:
+            for return_value, labels, weights in image_dataloader:
                 logit = clipmodel(**return_value)
                 loss = F.cross_entropy(logit.logits_per_image, labels)
+                weights_loss=(loss * weights).mean()
                 optimizer.zero_grad()
-                loss.backward()  # 清空上一步的梯度 # 计算梯度
+                weights_loss.backward()  # 清空上一步的梯度 # 计算梯度
                 optimizer.step()
                 print(loss.item())
             # self.writer.add_scalar(f'Client_{self.client_id}/round_{self.round}/image_encoderTraining_Loss', loss.item(), epoch)
@@ -367,7 +389,7 @@ class Client:
                                      str(self.client_id) + "_client_id")
         os.makedirs(os.path.dirname(tem_save_path), exist_ok=True)
         new_vision_model.save_pretrained(tem_save_path)
-        del clipmodel
+        del clipmodel, clip_vision_model
         torch.cuda.empty_cache()
 
 
@@ -400,7 +422,7 @@ class Client:
         correct_predictions = 0
         total_samples = 0
         with torch.no_grad():
-            for return_value, labels in image_dataloader:
+            for return_value, labels, _ in image_dataloader:
                 logit = clipmodel(**return_value)
                 predictions = logit.logits_per_image.argmax(dim=-1)
                 correct_predictions += (predictions == labels).sum().item()

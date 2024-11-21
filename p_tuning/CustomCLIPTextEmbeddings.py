@@ -65,7 +65,6 @@ class VirtualTokenManager(nn.Module):
                     tem_end=self.zero.repeat(left+(len(tem_arr)-tem_tensor.size(0)), 1) if category[len(category)-left+1]==0 else self.end.repeat(left, 1)
                 tem_end=torch.cat((self.end, tem_end), dim=0)
             batch_tokens.append(torch.cat((tem_tensor, tem_end.detach()), dim=0))
-        # 返回所有虚拟 token 作为一个 batch
         return torch.stack(batch_tokens)
 
 
